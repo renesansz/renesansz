@@ -30,6 +30,9 @@
 					border-radius: 10px;
 					color: white;
 				}
+				.banner {
+					text-align: center;
+				}
 			</style>
 			<div class="container">
 				<div class="banner">
