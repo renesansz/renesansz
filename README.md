@@ -8,3 +8,7 @@
 <p align = "center">
  <img  src="https://github-readme-streak-stats.herokuapp.com/?user=renesansz&show_icons=true&locale=en&layout=compact&theme=neon-palenight&line_height=0" />
 </p>
+<hr />
+<p align = "center">
+  <img class="flex-1" src="https://github-readme-quotes.herokuapp.com/quote?layout=samuel&theme=solarized-light" alt="Quote" width="846" />
+</p>
