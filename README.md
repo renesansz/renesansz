@@ -10,5 +10,5 @@
 </p>
 <hr />
 <p align = "center">
-  <img src="https://github-readme-quotes.herokuapp.com/quote?layout=samuel&theme=solarized-light" alt="Quote" width="846" />
+  <img src="https://github-readme-quotes.herokuapp.com/quote?layout=samuel&theme=solarized-light" alt="Quote" />
 </p>
