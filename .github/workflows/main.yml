@@ -1,0 +1,134 @@
+name: Archive inactive repositories
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archive-inactive-repos
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.ARCHIVE_TOKEN }}
+      OWNER: renesansz
+      INACTIVE_DAYS: "365"
+      DRY_RUN: "true"
+
+      # Filters
+      ONLY_PUBLIC: "true"
+      SKIP_FORKS: "true"
+      SKIP_TEMPLATES: "true"
+      SKIP_ARCHIVED: "true"
+      SKIP_WITH_OPEN_ISSUES: "true"
+      SKIP_WITH_OPEN_PRS: "true"
+
+    steps:
+      - name: Archive inactive repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          now_epoch="$(date -u +%s)"
+          cutoff_epoch="$(( now_epoch - (INACTIVE_DAYS * 86400) ))"
+
+          echo "Owner: $OWNER"
+          echo "Inactive days threshold: $INACTIVE_DAYS"
+          echo "Dry run: $DRY_RUN"
+          echo
+
+          # Public repos only
+          visibility_args=()
+          if [[ "${ONLY_PUBLIC}" == "true" ]]; then
+            visibility_args+=(--visibility public)
+          fi
+
+          repos_json="$(gh repo list "$OWNER" "${visibility_args[@]}" --limit 2000 \
+            --json nameWithOwner,pushedAt,isArchived,isFork,isTemplate)"
+
+          candidates="$(echo "$repos_json" | jq -r --argjson cutoff "$cutoff_epoch" '
+            .[]
+            | select(.pushedAt != null)
+            | .pushedEpoch = ( .pushedAt | fromdateiso8601 )
+            | select(.pushedEpoch < $cutoff)
+            | .nameWithOwner
+          ')"
+
+          if [[ -z "${candidates}" ]]; then
+            echo "No public repos found older than ${INACTIVE_DAYS} days based on pushedAt."
+            exit 0
+          fi
+
+          echo "Candidates (public, older than cutoff based on pushedAt):"
+          echo "$candidates" | sed 's/^/- /'
+          echo
+
+          while IFS= read -r full; do
+            [[ -z "$full" ]] && continue
+
+            repo_info="$(echo "$repos_json" | jq -r --arg full "$full" '
+              .[] | select(.nameWithOwner == $full)
+              | {nameWithOwner, pushedAt, isArchived, isFork, isTemplate}
+            ')"
+
+            is_archived="$(echo "$repo_info" | jq -r '.isArchived')"
+            is_fork="$(echo "$repo_info" | jq -r '.isFork')"
+            is_template="$(echo "$repo_info" | jq -r '.isTemplate')"
+            pushed_at="$(echo "$repo_info" | jq -r '.pushedAt')"
+
+            if [[ "${SKIP_ARCHIVED}" == "true" && "${is_archived}" == "true" ]]; then
+              echo "SKIP (already archived): $full"
+              continue
+            fi
+            if [[ "${SKIP_FORKS}" == "true" && "${is_fork}" == "true" ]]; then
+              echo "SKIP (fork): $full"
+              continue
+            fi
+            if [[ "${SKIP_TEMPLATES}" == "true" && "${is_template}" == "true" ]]; then
+              echo "SKIP (template): $full"
+              continue
+            fi
+
+            # Skip repos with open PRs (counts as PRs, not issues)
+            if [[ "${SKIP_WITH_OPEN_PRS}" == "true" ]]; then
+              open_prs="$(gh api "repos/${full}/pulls?state=open&per_page=1" --include \
+                | awk 'BEGIN{IGNORECASE=1} /^link:/{next} /^x-total-count:/{print $2}' \
+                | tr -d '\r' || true)"
+              # Fallback if header missing: count array size
+              if [[ -z "${open_prs}" ]]; then
+                open_prs="$(gh api "repos/${full}/pulls?state=open&per_page=100" | jq 'length')"
+              fi
+              if [[ "${open_prs}" != "0" ]]; then
+                echo "SKIP (has open PRs: ${open_prs}): $full"
+                continue
+              fi
+            fi
+
+            # Skip repos with open issues (NOTE: this endpoint includes PRs unless filtered out)
+            if [[ "${SKIP_WITH_OPEN_ISSUES}" == "true" ]]; then
+              # Use search to count open issues excluding PRs
+              q="repo:${full} is:issue is:open"
+              open_issues="$(gh api "search/issues?q=$(python3 -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["Q"]))' Q="$q")&per_page=1" \
+                | jq -r '.total_count')"
+              if [[ "${open_issues}" != "0" ]]; then
+                echo "SKIP (has open issues: ${open_issues}): $full"
+                continue
+              fi
+            fi
+
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "DRY RUN: would archive $full (last pushed: $pushed_at)"
+              continue
+            fi
+
+            echo "Archiving $full (last pushed: $pushed_at)"
+            gh api -X PATCH "repos/${full}" -f archived=true >/dev/null
+            echo "Archived: $full"
+
+          done <<< "$candidates"
